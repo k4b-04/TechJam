@@ -9,6 +9,10 @@ Contract this file must honor on every run (Decision 1, Day-1 notes):
     itself from whether the file exists/parses.
   - the hidden test split must be physically unreachable from this file (hard rule
     #1) — not just unused. See splits.pop('test', ...) below.
+  - the FIELDS list + build_encoding() below (not data.encode(), which is no longer
+    imported) is what makes feature changes actually take effect — see build_encoding's
+    docstring for why. This is the fix for the "agent proposes 3 feature sets, gets the
+    identical model 3 times" bug.
 
 OPEN QUESTION — not yet confirmed with Owner C/A, flag before trusting this runs
 inside the real sandbox: once run_candidate() copies this code into a fresh
@@ -36,9 +40,28 @@ DATA_DIR = os.environ.get("KUAIRAND_DATA_DIR", os.path.join(REPO_ROOT, "KuaiRand
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from data import load, encode, FIELDS   # noqa: E402
+from data import load   # noqa: E402  — encode/FIELDS deliberately NOT imported; data.encode()
+                          # hardcodes 5 fields at fixed tuple positions and ignores FIELDS past
+                          # len(), so any agent edit to a field list there silently does nothing.
+                          # build_encoding() below is the real, editable replacement.
 from evaluate import evaluate            # noqa: E402
+import csv                                # noqa: E402
 import numpy as np                        # noqa: E402
+
+# ============================================================================
+# THIS is what the agent should edit to try a different feature set. Keep the
+# same 5 fields as the default — that's the acceptance test (must still
+# reproduce valid primary 0.6016). Anything below not in this list, but
+# present in EXTRA_USER_COLS/EXTRA_VIDEO_COLS, is available to add.
+# ============================================================================
+FIELDS = ['user_id', 'video_id', 'author_id', 'tab', 'dur_bucket']
+
+# Optional extra columns loaded from user_features_pure.csv / video_features_basic_pure.csv,
+# mirroring ablation_features.py's own column choice (author_id excluded here — it's already
+# available via the base row, same as in data.load()).
+EXTRA_USER_COLS = ['follow_user_num_range', 'register_days_range', 'fans_user_num_range',
+                    'friend_user_num_range', 'user_active_degree']
+EXTRA_VIDEO_COLS = ['music_id', 'video_type', 'upload_type']
 
 
 def sigmoid(x): return 1.0 / (1.0 + np.exp(-np.clip(x, -30, 30)))
@@ -82,6 +105,83 @@ class FM:
         return np.concatenate([self.logits(X[i:i + bs])[0] for i in range(0, len(X), bs)])
 
 
+def _bucket_edges(durations, n=10):
+    return np.quantile(np.asarray(durations), np.linspace(0, 1, n + 1)[1:-1])
+
+
+def _load_extra_features(data_dir):
+    """Same two CSVs ablation_features.py reads, so the extra columns are ready for
+    the agent to reach for without it having to write its own CSV-loading code."""
+    u_ext = {}
+    with open(os.path.join(data_dir, 'user_features_pure.csv')) as fh:
+        for r in csv.DictReader(fh):
+            u_ext[r['user_id']] = {k: r.get(k, 'UNK') for k in EXTRA_USER_COLS}
+    v_ext = {}
+    with open(os.path.join(data_dir, 'video_features_basic_pure.csv')) as fh:
+        for r in csv.DictReader(fh):
+            v_ext[r['video_id']] = {k: r.get(k, 'UNK') for k in EXTRA_VIDEO_COLS}
+    return u_ext, v_ext
+
+
+def build_encoding(splits, fields, data_dir):
+    """Same vocabulary/offset logic as data.py's encode() (lines 44-50) — copied,
+    not reimplemented — except raw() is driven by `fields` instead of a hardcoded
+    5-tuple. This is the actual fix: previously an agent could edit FIELDS all it
+    wanted and the model trained identically every time, because data.encode()
+    read tuple positions directly and only ever used FIELDS for len(FIELDS).
+    """
+    tr = splits['train']
+    edges = _bucket_edges([x[5] for x in tr])   # x[5] = duration_ms, same position as data.py
+    u_ext, v_ext = _load_extra_features(data_dir)
+
+    def raw(x):
+        # x = (date, user_id, video_id, author_id, tab, duration_ms, label) — data.load()'s shape
+        base = {
+            'user_id': x[1], 'video_id': x[2], 'author_id': x[3], 'tab': x[4],
+            'dur_bucket': str(int(np.searchsorted(edges, x[5]))),
+        }
+        eu, ev = u_ext.get(x[1], {}), v_ext.get(x[2], {})
+        out = []
+        for f in fields:
+            if f in base:
+                out.append(base[f])
+            elif f in eu:
+                out.append(eu[f])
+            elif f in ev:
+                out.append(ev[f])
+            else:
+                # loud failure, not a silent no-op — this is the exact bug being fixed.
+                # The traceback lands in run_candidate's stderr and flows into
+                # last_error, giving the agent something concrete to repair from.
+                raise ValueError(
+                    f"unknown field {f!r} — not in the base row, "
+                    f"EXTRA_USER_COLS {EXTRA_USER_COLS}, or EXTRA_VIDEO_COLS {EXTRA_VIDEO_COLS}"
+                )
+        return out
+
+    vocabs = [dict() for _ in fields]
+    for x in tr:
+        for i, v in enumerate(raw(x)):
+            if v not in vocabs[i]:
+                vocabs[i][v] = len(vocabs[i])
+    unk = [len(v) for v in vocabs]
+    field_dims = [len(v) + 1 for v in vocabs]
+    offsets = np.cumsum([0] + field_dims[:-1]).astype(np.int32)
+
+    enc = {}
+    for name, rws in splits.items():
+        X = np.empty((len(rws), len(fields)), dtype=np.int32)
+        y = np.empty(len(rws), dtype=np.float32)
+        users = []
+        for n, x in enumerate(rws):
+            for i, v in enumerate(raw(x)):
+                X[n, i] = vocabs[i].get(v, unk[i]) + offsets[i]
+            y[n] = x[6]
+            users.append(x[1])
+        enc[name] = (X, y, users)
+    return enc, int(sum(field_dims))
+
+
 def train_and_score(k=16, lr=0.001, epochs=15, bs=8192, patience=4, seed=0, verbose=True):
     """Replaces the placeholder's fixed (0.60, 0.58). Loads train+valid only (test
     split is popped out of memory, never just "unused") and trains the FM baseline.
@@ -95,7 +195,7 @@ def train_and_score(k=16, lr=0.001, epochs=15, bs=8192, patience=4, seed=0, verb
     print(f"loading {DATA_DIR} ...")
     splits = load(DATA_DIR)
     splits.pop("test", None)          # hard removal — test rows do not exist past this line
-    enc, dim = encode(splits)
+    enc, dim = build_encoding(splits, FIELDS, DATA_DIR)
     Xtr, ytr, _ = enc["train"]; Xva, yva, uva = enc["valid"]
 
     m = FM(dim, k=k, lr=lr, seed=seed)
@@ -123,12 +223,11 @@ def train_and_score(k=16, lr=0.001, epochs=15, bs=8192, patience=4, seed=0, verb
 
 def main():
     gauc, ndcg5, primary = train_and_score()
+    # evaluate.py returns numpy float32 scalars — json.dump can't serialize those
+    # directly (TypeError: Object of type float32 is not JSON serializable), so
+    # cast to native Python floats before writing.
     with open("metrics.json", "w", encoding="utf-8") as f:
-        json.dump({
-            "gauc": float(gauc), 
-            "ndcg5": float(ndcg5), 
-            "primary": float(primary)
-        }, f)
+        json.dump({"gauc": float(gauc), "ndcg5": float(ndcg5), "primary": float(primary)}, f)
     print(f"primary={primary:.4f} gauc={gauc:.4f} ndcg5={ndcg5:.4f}")
 
 
