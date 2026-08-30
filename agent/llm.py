@@ -103,7 +103,7 @@ class LLMError(RuntimeError):
 class LLMClient:
     provider: str = field(default_factory=lambda: os.getenv("LLM_PROVIDER", "anthropic"))
     model: str = field(default_factory=lambda: os.getenv("LLM_MODEL", ""))
-    max_tokens: int = 8000
+    max_tokens: int = 24000
     temperature: float = 1.0
     max_retries: int = 4
     timeout: float = 240.0        # seconds — a stalled call must fail, not hang
@@ -300,8 +300,10 @@ def propose_change(
                 hypothesis=hypothesis, code=code)
 
     if code is None:
-        base["error"] = "no_code_block_in_response"
+        base["error"] = ("response_truncated — raise max_tokens"
+                         if "```" in text else "no_code_block_in_response")
         return base
+        
     if hypothesis is None:
         base["hypothesis"] = "(model gave no hypothesis)"
 

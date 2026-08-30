@@ -37,6 +37,12 @@ HARD RULES — violating any of these invalidates the run:
 3. No external training data. KuaiRand files only.
 4. Stay on CPU with numpy unless the change genuinely requires otherwise —
    compute cost is scored and lower is better.
+5. The file MUST stay runnable as `python3 pipeline.py` and MUST write
+   metrics.json into its own working directory before exiting, containing
+   {"gauc": float, "ndcg5": float, "primary": float} computed on the
+   VALIDATION split. Not writing this file is a total failure.
+6. Do not remove `splits.pop("test", None)`. Never load the test split.
+7. Keep runtime under ~8 minutes on one CPU core. The baseline takes ~100s.
 
 CALIBRATION
 Seed-to-seed noise on this benchmark is about 0.0008. A change worth keeping

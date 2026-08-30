@@ -5,3 +5,7 @@ __pycache__/
 .env
 *.tar.gz
 *.pyc
+_probe.py
+metrics.json
+__pycache__/
+*.pyc
