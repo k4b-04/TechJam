@@ -132,7 +132,7 @@ def run_agent(max_iters: int = 20, budget_s: int = 7200, timeout_s: int = 600) -
     started = time.time()
 
     best_code = read_text(os.path.join(HERE, "pipeline.py"))
-    best_score = None          # filled by iteration 1
+    best_score = BASELINE_PRIMARY         # filled by iteration 1
     current_code = best_code
 
     history: list[dict] = []   # what B sees — hypothesis + score + verdict

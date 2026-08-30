@@ -44,6 +44,14 @@ HARD RULES — violating any of these invalidates the run:
 6. Do not remove `splits.pop("test", None)`. Never load the test split.
 7. Keep runtime under ~8 minutes on one CPU core. The baseline takes ~100s.
 
+HOW FEATURES ACTUALLY WORK HERE
+`encode()` imported from data.py builds a FIXED 5-field encoding
+(user_id, video_id, author_id, tab, duration bucket) using hardcoded tuple
+positions. Appending names to data.FIELDS does NOT register new features —
+it silently does nothing. To change the feature set you must build the
+(X, y, user_ids) arrays inside pipeline.py yourself. See ablation_features.py
+in the repo root for a working custom multi-field encoder.
+
 CALIBRATION
 Seed-to-seed noise on this benchmark is about 0.0008. A change worth keeping
 moves the score by roughly 0.005 or more. If you find yourself proposing
