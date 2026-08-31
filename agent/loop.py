@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import difflib
 import json
 import os
 import subprocess
@@ -130,6 +131,7 @@ def has_converged(scores: list[float]) -> bool:
 
 def run_agent(max_iters: int = 20, budget_s: int = 7200, timeout_s: int = 600) -> dict:
     started = time.time()
+    run_id = time.strftime("%Y%m%d_%H%M%S")
 
     best_code = read_text(os.path.join(HERE, "pipeline.py"))
     best_score = BASELINE_PRIMARY         # filled by iteration 1
@@ -169,20 +171,33 @@ def run_agent(max_iters: int = 20, budget_s: int = 7200, timeout_s: int = 600) -
             entry["errors"].append(f"llm: {prop['error']}")
             entry["duration_s"] = round(time.time() - t_iter, 1)
             log_iteration(entry)
+            history.append(entry.copy())
             print(f"  llm failed: {prop['error']}")
             last_error = None          # not the pipeline's fault — don't repair
             continue
 
         print(f"  hypothesis: {prop['hypothesis']}")
 
+        # The actual patch applied this iteration — not just what B claims
+        # it changed. Computed here, before best_code can be overwritten.
+        entry["code_diff"] = "".join(
+            difflib.unified_diff(
+                best_code.splitlines(keepends=True),
+                prop["code"].splitlines(keepends=True),
+                fromfile="best_pipeline.py",
+                tofile=f"candidate_iter_{i:03d}.py",
+            )
+        )
+
         # --- 2. run it (C) -------------------------------------------------
-        workdir = os.path.join(HERE, "runs", f"iter_{i:03d}")
+        workdir = os.path.join(HERE, "runs", run_id, f"iter_{i:03d}")
         run = run_candidate(prop["code"], workdir, timeout=timeout_s)
         entry["duration_s"] = run["duration_s"]
 
         if not run["ok"]:
             entry["errors"].append(f"run: {run['error']}")
             log_iteration(entry)
+            history.append(entry.copy())
             print(f"  run failed after {run['duration_s']}s: {run['error']}")
             # Hand the traceback to B next round; keep best_code untouched.
             last_error = run["error"] + "\n" + run["stderr"][-1500:]
@@ -194,6 +209,7 @@ def run_agent(max_iters: int = 20, budget_s: int = 7200, timeout_s: int = 600) -
         if not m["ok"]:
             entry["errors"].append(f"metrics: {m['error']}")
             log_iteration(entry)
+            history.append(entry.copy())
             print(f"  no usable score: {m['error']}")
             last_error = f"The run finished but produced no valid metrics.json: {m['error']}"
             current_code = best_code
@@ -218,6 +234,7 @@ def run_agent(max_iters: int = 20, budget_s: int = 7200, timeout_s: int = 600) -
 
         scores.append(primary)
         log_iteration(entry)
+        history.append(entry.copy())
 
         # --- 5. converged? --------------------------------------------------
         if has_converged(scores):
