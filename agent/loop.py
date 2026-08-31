@@ -38,6 +38,7 @@ import time
 from llm import propose_change, METER
 from metrics import read_metrics
 from logger import log_iteration
+from runner import run_candidate
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(HERE)
@@ -53,52 +54,11 @@ PATIENCE = 3
 
 
 # ---------------------------------------------------------------------------
-# TEMPORARY runner — Owner C replaces this with runner.run_candidate().
-# Kept here so the loop is runnable before C's module lands. Same contract.
+# run_candidate() now comes from runner.py (Owner C) — see import above. It
+# sets KUAIRAND_REPO_ROOT / KUAIRAND_DATA_DIR / PYTHONPATH itself, same
+# convention this temporary stub used, confirmed working against the real
+# pipeline.py (Owner D). The inline version that used to live here is gone.
 # ---------------------------------------------------------------------------
-
-def run_candidate(code: str, workdir: str, timeout: int = 600) -> dict:
-    """Execute model-written code in its own process. Never raises."""
-    base = {"ok": False, "stdout": "", "stderr": "", "error": None, "duration_s": 0.0}
-
-    # Cheap gate first: don't spend 100 seconds finding out it won't parse.
-    try:
-        ast.parse(code)
-    except SyntaxError as exc:
-        base["error"] = f"syntax_error: {exc}"
-        return base
-
-    os.makedirs(workdir, exist_ok=True)
-    with open(os.path.join(workdir, "candidate.py"), "w", encoding="utf-8") as f:
-        f.write(code)
-
-    # pipeline.py imports data.py / evaluate.py from the repo root and reads the
-    # dataset. Neither is reachable from workdir, so we point it back via env.
-    env = {
-        **os.environ,
-        "KUAIRAND_REPO_ROOT": REPO_ROOT,
-        "KUAIRAND_DATA_DIR": os.path.join(REPO_ROOT, "KuaiRand-Pure", "data"),
-    }
-
-    t0 = time.time()
-    try:
-        p = subprocess.run(
-            [sys.executable, "candidate.py"],
-            cwd=workdir, env=env,
-            capture_output=True, text=True, encoding="utf-8",
-            timeout=timeout,
-        )
-        base["duration_s"] = round(time.time() - t0, 1)
-        base["stdout"] = (p.stdout or "")[-3000:]
-        base["stderr"] = (p.stderr or "")[-3000:]
-        base["ok"] = p.returncode == 0
-        if not base["ok"]:
-            base["error"] = f"exit_code_{p.returncode}: {base['stderr'][-800:]}"
-    except subprocess.TimeoutExpired:
-        base["duration_s"] = round(time.time() - t0, 1)
-        base["error"] = f"timeout after {timeout}s"
-
-    return base
 
 
 # ---------------------------------------------------------------------------

@@ -117,16 +117,33 @@ class LLMClient:
             raise LLMError(f"No model set for provider {self.provider!r}. Set LLM_MODEL.")
 
         if self.provider == "anthropic":
-            from anthropic import Anthropic          # imported lazily so the
-            self._client = Anthropic(timeout=self.timeout)   # other SDK isn't required
+            try:
+                from anthropic import Anthropic          # imported lazily so the
+                self._client = Anthropic(timeout=self.timeout)   # other SDK isn't required
+            except ImportError as exc:
+                raise LLMError(
+                    f"anthropic package not installed ({exc}). Run: pip install anthropic"
+                ) from exc
+            except Exception as exc:                      # noqa: BLE001
+                # covers bad/missing auth and any other provider-side failure
+                # at construction time (varies by SDK version) — never let a
+                # client-construction problem crash the whole loop.
+                raise LLMError(f"failed to construct Anthropic client: {exc}") from exc
         elif self.provider == "openai":
-            from openai import OpenAI
-            # base_url lets us point at Gemini / ModelArk / any OpenAI-compatible endpoint
-            self._client = OpenAI(
-                base_url=os.getenv("LLM_BASE_URL") or None,
-                timeout=self.timeout,
-                max_retries=0,        # we do our own retries, with logging
-            )
+            try:
+                from openai import OpenAI
+                # base_url lets us point at Gemini / ModelArk / any OpenAI-compatible endpoint
+                self._client = OpenAI(
+                    base_url=os.getenv("LLM_BASE_URL") or None,
+                    timeout=self.timeout,
+                    max_retries=0,        # we do our own retries, with logging
+                )
+            except ImportError as exc:
+                raise LLMError(
+                    f"openai package not installed ({exc}). Run: pip install openai"
+                ) from exc
+            except Exception as exc:                      # noqa: BLE001
+                raise LLMError(f"failed to construct OpenAI client: {exc}") from exc
         else:
             raise LLMError(f"Unknown LLM_PROVIDER {self.provider!r} (use anthropic or openai)")
 
