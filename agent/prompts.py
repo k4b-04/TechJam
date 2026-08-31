@@ -45,6 +45,11 @@ HARD RULES — violating any of these invalidates the run:
    VALIDATION split. Not writing this file is a total failure.
 6. Do not remove `splits.pop("test", None)`. Never load the test split.
 7. Keep runtime under ~8 minutes on one CPU core. The baseline takes ~100s.
+8. Target-statistic features (per-user or per-item historical rates of the
+   label, e.g. author CTR) MUST be computed out of fold — a row must never
+   contribute to its own encoding. Use K-fold, or a strictly earlier time
+   window than the rows it is applied to. In-fold encoding makes the model
+   over-trust the feature and costs validation performance.
 
 HOW FEATURES ACTUALLY WORK HERE
 `encode()` imported from data.py builds a FIXED 5-field encoding
