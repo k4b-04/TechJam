@@ -42,7 +42,8 @@ HARD RULES — violating any of these invalidates the run:
    {"gauc": float, "ndcg5": float, "primary": float} computed on the
    VALIDATION split. Not writing this file is a total failure.
 6. Do not remove `splits.pop("test", None)`. Never load the test split.
-7. Keep runtime under ~8 minutes on one CPU core. The baseline takes ~100s.
+7. Keep runtime under ~8 minutes on one CPU core. The baseline now trains 3 seeds
+   per run (mean-scored for reliability) and takes ~300s total, not ~100s.
 
 HOW FEATURES ACTUALLY WORK HERE
 pipeline.py has its own FIELDS list and build_encoding(splits, fields, data_dir)
