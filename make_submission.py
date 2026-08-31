@@ -24,9 +24,13 @@ import os
 import sys
 import time
 
+# This file lives at the repo root (not agent/, despite the module docstring
+# above), so REPO_ROOT is just its own directory — one dirname(), not two.
+# (agent/pipeline.py's identical-looking fallback is correct as written there
+# because that file actually is one level below the repo root.)
 REPO_ROOT = os.environ.get(
     "KUAIRAND_REPO_ROOT",
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    os.path.dirname(os.path.abspath(__file__)),
 )
 DATA_DIR = os.environ.get("KUAIRAND_DATA_DIR", os.path.join(REPO_ROOT, "KuaiRand-Pure", "data"))
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -40,10 +44,24 @@ from data import load                                                     # noqa
 from evaluate import evaluate                                              # noqa: E402
 import numpy as np                                                          # noqa: E402
 
-from best_pipeline import (                                                 # noqa: E402
-    DeepFM, FIELDS, EXTRA_USER_COLS, EXTRA_VIDEO_COLS,
-    _bucket_edges, _load_extra_features,
-)
+try:
+    # The real target: a snapshot the agent loop wrote after a candidate beat
+    # the baseline (see agent/loop.py). Gitignored, so it only exists once
+    # someone has actually run the loop to an improved result.
+    from best_pipeline import (                                             # noqa: E402
+        DeepFM, FIELDS, EXTRA_USER_COLS, EXTRA_VIDEO_COLS,
+        _bucket_edges, _load_extra_features,
+    )
+except ModuleNotFoundError:
+    # No best_pipeline.py yet — fall back to the winning architecture as
+    # currently checked into pipeline.py itself (DeepFM + out-of-fold target
+    # encoding + CWM video columns; see pipeline.py's DEEPFM_FIELDS/DeepFM/
+    # compute_target_encodings docstrings for why these are kept separate
+    # from pipeline.py's own 5-field agent-loop baseline).
+    from pipeline import (                                                  # noqa: E402
+        DeepFM, DEEPFM_FIELDS as FIELDS, EXTRA_USER_COLS, EXTRA_VIDEO_COLS,
+        _bucket_edges, _load_extra_features,
+    )
 
 
 def compute_target_encodings_with_test(splits, m=20, n_buckets=10):
