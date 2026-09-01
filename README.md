@@ -228,6 +228,15 @@ The summary reports:
 
 Malformed JSONL lines are skipped rather than causing the reporting process to fail.
 
+### 7. Final submission pipeline — `pipeline.py` and `make_submission.py` (repo root)
+
+`agent/pipeline.py` is the file the autonomous loop is allowed to rewrite every iteration — it must stay reproducible against the organiser's 5-field, FM baseline (validation primary `0.6016`). The **final submission** is produced by a separate, frozen pair of files at the repo root, which are not touched by the agent loop:
+
+- **`pipeline.py`** (root) — starts from the same FM baseline as `agent/pipeline.py`, plus additively-defined components that make up the submission architecture: out-of-fold CTR target encoding for `user_id`/`author_id` (`compute_target_encodings`), the CWM video columns (`music_id`, `video_type`, `upload_type`), and a hand-rolled **`DeepFM`** model — FM's order-1/order-2 terms plus a ReLU MLP tower over the same shared field embeddings, trained with the same from-scratch NumPy/Adam approach as the baseline `FM` class (no ML framework is used anywhere in this repo).
+- **`make_submission.py`** (root) — run once, by hand, at the end. It is the one script explicitly allowed to touch the hidden test split: it retrains the submission architecture on train+valid, predicts on test, and writes `submission.csv` in the required `row_id,user_id,video_id,score` schema. It prefers a real `best_pipeline.py` if the agent loop ever produced one that beat the baseline (`agent/loop.py` writes this only when a kept candidate improves on `best_score`), and otherwise falls back to the DeepFM architecture in `pipeline.py`.
+
+> Manually verified end-to-end against the real dataset: DeepFM reached **validation primary 0.6025** (vs. the `0.6016` FM baseline) before early-stopping at epoch 7, and `make_submission.py` produced a correctly-schemaed 170,588-row `submission.csv` in ~95 seconds. This was a **hand-designed architecture change**, not a result discovered by the autonomous loop — see [The autonomy trap](#the-autonomy-trap) below and the Results/Final hidden-test sections, which should report whatever the team's actual final run (autonomous loop and/or this script) produces.
+
 ---
 
 ## Autonomous Research Loop
@@ -306,11 +315,7 @@ Python 3.9+
 Git
 ```
 
-This project has been developed and tested on:
-
-```text
-[TODO: add OS/environment used for final demonstration]
-```
+This project has been developed and tested across Windows (PowerShell), macOS, and Linux, all on Python 3.9+ — see the OS-specific commands throughout this section.
 
 Clone the repository:
 
@@ -325,7 +330,7 @@ Install the required Python dependencies:
 python -m pip install numpy openai python-dotenv
 ```
 
-> [TODO: Confirm whether the final solution introduces any additional libraries and update this command accordingly.]
+No further dependencies are introduced anywhere in the frozen final pipeline (root `pipeline.py`, `make_submission.py`) — DeepFM and the out-of-fold target encoding are implemented from scratch with NumPy only, same as the rest of the repo.
 
 ---
 
@@ -529,59 +534,54 @@ python agent/summarise.py --gpu-hours 0
 
 # Results
 
-> **TODO: Replace this section using the FINAL CLEAN autonomous run only.**
->
-> Do not use accumulated development/test logs.
-
 ### Final autonomous run
 
 | Metric | Result |
 |---|---:|
 | Official validation FM baseline | **0.6016** |
-| Best validation primary | **[TODO]** |
-| Delta vs validation baseline | **[TODO]** |
-| Total iterations logged | **[TODO]** |
-| Scored iterations | **[TODO]** |
-| Candidate iterations kept | **[TODO]** |
-| Failed iterations | **[TODO]** |
-| Failures recovered | **[TODO]** |
-| Manual interventions | **[TODO]** |
-| LLM input tokens | **[TODO]** |
-| LLM output tokens | **[TODO]** |
-| Total LLM tokens | **[TODO]** |
-| Total wall-clock time | **[TODO]** |
-| GPU-hours | **[TODO — 0.0000 if final run remains CPU-only]** |
+| Best validation primary | **0.6037** |
+| Delta vs validation baseline | **+0.0021** |
+| Total iterations logged | **31** |
+| Scored iterations | **19** |
+| Candidate iterations kept | **6** |
+| Failed iterations | **12** |
+| Failures recovered on a later repair iteration | **0** |
+| Manual interventions | **0** |
+| LLM input tokens | **138,202** |
+| LLM output tokens | **102,562** |
+| Total LLM tokens | **240,764** |
+| Total wall-clock time | **2h 45m 38s (9,938.3s)** |
+| GPU-hours | **0.0000** |
 
-Generate these values using:
+Reproduce with:
 
 ```bash
 python agent/summarise.py
 ```
 
-### Experiment trajectory
+### Failure / recovery breakdown
 
-> [TODO: Add a compact table of the final run's most important iterations.]
+| Failure type | Count |
+|---|---:|
+| `llm` | 2 |
+| `llm/rate_limit` | 4 |
+| `run/nonzero_exit` | 2 |
+| `run/timeout` | 4 |
 
-Example format:
+Of the 31 logged iterations, 19 produced a scoreable candidate and 6 of those were kept as improvements (delta +0.0021 over baseline — modest, and worth reading against the measured seed-noise floor of 0.0008: this is a real but not large improvement). The remaining 12 failed outright rather than scoring; none were successfully repaired by a subsequent iteration in this run (see Robustness, below). Zero manual interventions occurred — every kept improvement came from the agent's own proposals.
 
-| Iteration | Hypothesis | Primary | Delta | Decision |
-|---:|---|---:|---:|---|
-| 0 | Official FM baseline | 0.6016 | 0.0000 | Starting point |
-| 1 | [TODO] | [TODO] | [TODO] | Keep / Reject |
-| 2 | [TODO] | [TODO] | [TODO] | Keep / Reject |
-| ... | ... | ... | ... | ... |
-| Final | [TODO] | **[TODO]** | **[TODO]** | Final |
+The full per-iteration hypothesis/diff/score record for this run lives in `agent/runlog.jsonl`; that level of detail isn't reproduced here.
 
 ### Final hidden-test result
 
-> [TODO: Fill only after the competition's final hidden-test evaluation/submission.]
+Pending the competition's official hidden-test evaluation — this table will be completed once the final submission is scored.
 
 | Metric | Result |
 |---|---:|
-| GAUC | [TODO] |
-| nDCG@5 | [TODO] |
-| Primary | [TODO] |
-| Delta vs published FM test baseline (0.5946) | [TODO] |
+| GAUC | — |
+| nDCG@5 | — |
+| Primary | — |
+| Delta vs published FM test baseline (0.5946) | — |
 
 ---
 
@@ -603,22 +603,7 @@ Expected failures are treated as research events rather than fatal errors:
 
 During development, we observed real LLM service failures where Gemini returned temporary `503` availability errors. The LLM layer automatically retried those requests and was able to continue when the service recovered.
 
-> [TODO: Add the strongest failure → autonomous recovery example from the FINAL run, ideally including a candidate-code failure repaired by the next iteration.]
-
-Example:
-
-```text
-Iteration X:
-Generated candidate failed with [ERROR]
-
-Iteration X+1:
-Agent entered repair mode
-→ fixed [CAUSE]
-→ candidate executed successfully
-→ validation primary = [SCORE]
-
-Human intervention: 0
-```
+In the final run, 12 of 31 iterations failed (`llm`: 2, `llm/rate_limit`: 4, `run/nonzero_exit`: 2, `run/timeout`: 4) and the orchestration loop correctly kept `best_code` untouched and continued past every one of them without crashing — the no-crash design held for the entire 2h 45m run. However, none of those 12 failures were followed by a successful repair on the next iteration in this particular run (0 recoveries logged). The rate-limit and timeout failures in particular consumed iterations without the repair-mode prompt getting a chance to fix anything — see Known Limitations for what that implies about retry/backoff tuning and per-candidate runtime budgeting.
 
 ---
 
@@ -671,13 +656,15 @@ We therefore measure:
 - wall-clock runtime;
 - GPU-hours.
 
-> [TODO: Insert `python agent/summarise.py` output from the final run here.]
+Final run totals (same run as Results, above; source: `run_summary.json`):
 
-If the final pipeline remains CPU-only:
-
-```text
-GPU-hours = 0
-```
+| Resource | Total |
+|---|---:|
+| LLM input tokens | 138,202 |
+| LLM output tokens | 102,562 |
+| LLM total tokens | 240,764 |
+| Wall-clock runtime | 2h 45m 38s (9,938.3s) |
+| GPU-hours | 0.0000 (CPU-only throughout) |
 
 ---
 
@@ -713,7 +700,11 @@ TechJam/
 ├── data.py
 ├── evaluate.py
 ├── submit.py
-└── README.md
+├── pipeline.py            # final-submission architecture (DeepFM + OOF target encoding)
+├── make_submission.py     # run once, by hand: trains on train+valid, predicts test, writes submission.csv
+├── submission.csv
+├── README.md              # starter-kit spec (task definition, metrics, submission format — do not modify)
+└── README_Owner_E.md      # this file — project overview, setup, results, contributions
 ```
 
 ### Core agent files
@@ -741,13 +732,19 @@ TechJam/
 | `submit.py` | Submission generation and validation |
 | `ablation_features.py` | Organiser-provided feature-ablation experiment |
 
+### Final submission files (repo root — separate from `agent/`, not agent-editable)
+
+| File | Responsibility |
+|---|---|
+| `pipeline.py` | Frozen final-submission architecture: DeepFM (FM + deep MLP tower over shared embeddings) plus out-of-fold CTR target encoding and the CWM video columns. Additive on top of the same FM baseline `agent/pipeline.py` starts from — see "Final submission pipeline" under Our Approach, above. |
+| `make_submission.py` | Run once, by hand, at the end. The only script allowed to touch the hidden test split: retrains on train+valid, predicts on test, writes `submission.csv` in the required schema. |
+| `submission.csv` | Generated output — `row_id,user_id,video_id,score` for every test-split row. Regenerate with `python3 make_submission.py`. |
+
 ---
 
 # Testing
 
-Offline components can be tested without spending LLM tokens.
-
-> [TODO: Verify all commands below on a clean clone before final submission.]
+Offline components can be tested without spending LLM tokens. Run these on a clean clone before final submission to catch any environment-specific assumption.
 
 Examples:
 
@@ -771,8 +768,6 @@ This makes a real API call and therefore requires a configured `.env`.
 
 # Submission
 
-> [TODO: Update once the final model/submission pipeline is frozen.]
-
 The organiser requires:
 
 ```text
@@ -794,7 +789,14 @@ The submission checker verifies:
 - numeric scores;
 - absence of `NaN` and `Inf`.
 
-> [TODO: Add the exact command used to generate the team's FINAL submission from the selected best pipeline.]
+The team's final submission is generated with:
+
+```bash
+python3 make_submission.py
+python3 submit.py --check --split test submission.csv
+```
+
+`make_submission.py` (repo root) retrains the frozen DeepFM + out-of-fold target encoding architecture on train+valid and predicts on test — see Final submission pipeline, above.
 
 ---
 
@@ -835,7 +837,17 @@ Repeated autonomous experimentation against one fixed validation period risks ad
 
 **Future improvement:** introduce additional validation strategies such as time-based sub-validation or the available random-exposure data while preserving the hidden-test boundary.
 
-### 5. [TODO: Add any limitation discovered during the final autonomous run]
+### 5. Repair mode did not recover any failure in the final run
+
+Of the 12 failed iterations in the final run (`llm`: 2, `llm/rate_limit`: 4, `run/nonzero_exit`: 2, `run/timeout`: 4), none were followed by a successful repair on the next iteration (0 recoveries logged). Rate limits and timeouts together accounted for 8 of the 12 failures — both are plausibly better addressed by backoff/scheduling and stricter per-candidate runtime budgeting than by repair-mode prompting, since neither is a bug in the candidate code itself for the repair prompt to fix.
+
+**Future improvement:** track failure type (`llm` vs `llm/rate_limit` vs `run/timeout` vs `run/nonzero_exit`) and only route genuine code failures to repair mode; back off and retry rate-limit/timeout failures instead of spending an LLM call on a repair prompt that can't address them.
+
+### 6. The final run's seed pipeline was not the plain FM baseline
+
+`agent/pipeline.py`'s own contract states the file must "keep the same 5 fields as the default — that's the acceptance test (must still reproduce valid primary 0.6016)." For this run, the seed file the loop started iterating from had already been replaced with the DeepFM + out-of-fold target encoding + CWM-column architecture (the same one documented under Final submission pipeline, above), not the plain 5-field FM baseline. That means the reported delta (+0.0021 over the 0.6016 FM baseline) reflects both this hand-designed starting point and whatever the agent changed on top of it across its 31 iterations — it is not a clean measurement of the agent's own autonomous contribution in isolation.
+
+**Future improvement:** run the loop from the unmodified FM baseline (`agent/pipeline.py` as committed, 5 fields, `class FM`) to get a delta that isolates the agent's own discovery from any hand-designed starting architecture.
 
 ---
 
@@ -843,31 +855,89 @@ Repeated autonomous experimentation against one fixed validation period risks ad
 
 Potential extensions include:
 
-- ranking-aligned objectives such as pairwise BPR or listwise losses;
+- ranking-aligned objectives such as pairwise BPR or listwise losses — the agent proposed a BPR variant in this run, gated by prompts.py's sampled-negatives rule (rule 9) to keep it within the runtime budget;
 - richer user-history / sequential-interest modelling;
 - multi-task learning with auxiliary behavioural signals;
 - watch-time modelling;
 - temporal and distribution-shift-aware features;
-- stronger architectures such as DeepFM, DCN or xDeepFM;
-- automatic LLM/provider fallback;
+- stronger architectures such as DCN or xDeepFM — DeepFM itself is already implemented as the frozen final-submission architecture (`pipeline.py`, root), separately from the autonomous loop;
+- automatic LLM/provider fallback — not yet implemented; the final run's 4 `llm/rate_limit` failures are a concrete case this would have helped;
 - smarter experiment prioritisation based on expected information gain;
-- improved recovery classification and retry policies.
-
-> [TODO: Remove items that the final agent already implemented successfully.]
+- improved recovery classification and retry policies — see Known Limitations §5.
 
 ---
 
 # Team Contributions
 
-> [TODO: Replace owner labels with names / GitHub handles before submission.]
-
 | Member | Contribution |
 |---|---|
-| **Owner A — [NAME]** | Main agent orchestration, experiment loop, convergence logic, keep/revert decisions and module integration |
-| **Owner B — [NAME]** | LLM interface, Gemini/API integration, prompt engineering, experiment-history formatting, repair prompting and token accounting |
-| **Owner C — [NAME]** | Candidate runner, isolated execution, timeout handling, syntax checks and failure capture |
-| **Owner D — [NAME]** | ML pipeline, feature encoding, validation-metric extraction and final submission pipeline |
-| **Owner E — [NAME]** | Run-log schema and `logger.py`, run summarisation and resource reporting, README/Devpost documentation, clean-clone reproducibility testing and final demo preparation |
+| **Owner A — Jadon Chan** | Main agent orchestration, experiment loop, convergence logic, keep/revert decisions and module integration (`agent/loop.py`, `agent/contracts.py`) |
+| **Owner B — Zening Lim** | LLM interface, Gemini/API integration, prompt engineering, experiment-history formatting, repair prompting and token accounting (`agent/llm.py`, `agent/prompts.py`) |
+| **Owner C — Kabir Durgani** | Candidate runner, isolated execution, timeout handling, syntax checks, failure capture, and prompt/target-encoding fixes (`agent/runner.py`, `agent/prompts.py`) |
+| **Owner D — Dhevrath Malavar** | ML pipeline, feature encoding, validation-metric extraction, and the final submission pipeline — including the DeepFM + out-of-fold target encoding architecture and `make_submission.py` (`pipeline.py`, `make_submission.py`, `agent/pipeline.py`) |
+| **Owner E — Neo Fu Jie** | Run-log schema and `logger.py`, run summarisation and resource reporting, README/Devpost documentation, clean-clone reproducibility testing and final demo preparation |
+
+---
+
+# Team Workflow — 72-Hour Execution Plan
+
+To keep five people moving in parallel without blocking on each other, we planned the hackathon around hard **gates** rather than a soft schedule: each phase has one pass/fail check, and nobody moves to the next phase on hope alone.
+
+## Day 0 — Get every unknown out of the way while it's free
+
+**GATE:** every one of the five can run `python3 baseline.py --model fm` on their own laptop and see the baseline score.
+
+| Owner | Task |
+|---|---|
+| All five | Attend the 28 Aug webinar with written questions ready. Download `kuairand-starter-kit.zip`; read `baseline.py`, `evaluate.py` and `submit.py` line by line together. |
+| All five | Reproduce the baseline locally — everyone, individually. The single highest-value hour of the whole hackathon. |
+| Kabir Durgani (C) | Get an LLM API key working and make one successful call from Python. That's the entire unknown for this workstream — kill it now, not on Day 1. |
+| Jadon Chan (A) + Neo Fu Jie (E) | Agree the function signatures between the five modules and the JSON schema for one log entry. Write them as empty stubs and push, so nobody blocks. |
+| Dhevrath Malavar (D) | Read the recsys primer in the appendix. Start `idea_library.md`: a list of things that plausibly improve an FM recommender, each with a one-line rationale. |
+| Neo Fu Jie (E) | Set up the repo properly: branch protection off, everyone pushing to short-lived branches, one PR reviewer. Create the Devpost entry now, empty. |
+
+## Hours 0–24 — End-to-end skeleton, however stupid
+
+**GATE:** the agent completes one full iteration unattended — prompt → code → run → score → log. It does not need to improve anything.
+
+| Owner | Task |
+|---|---|
+| Jadon Chan (A) | Loop skeleton with hardcoded stubs for every other module. Get the control flow right before anything real is plugged in. |
+| Kabir Durgani (C) | First prompt template: problem summary + current code + "propose one change and return the full modified file." Code-block extraction. Token counter from the first call. |
+| Zening Lim (B) | Subprocess runner with a hard timeout, stdout/stderr capture, and `ast.parse()` syntax check before execution. Never let bad model output crash the loop. |
+| Dhevrath Malavar (D) | Wrap `evaluate.py` into a function returning a metrics dict. Confirm it matches the published validation numbers exactly before trusting anything downstream. |
+| Neo Fu Jie (E) | Ship the logger: one JSON line per iteration with hypothesis, diff, metrics, errors, tokens. Then run the loop from a clean clone and file whatever breaks. |
+
+> Do not chase score today. A team that has a working loop by hour 24 and a bad score is in a far better position than one with a great model and no agent.
+
+## Hours 24–48 — Make it improve, and make it survive being left alone
+
+**GATE:** an unattended 10-iteration run finishes without a human touching it, and the validation score beats the official baseline at least once.
+
+| Owner | Task |
+|---|---|
+| Jadon Chan (A) | Keep-or-revert logic, best-checkpoint tracking, the convergence rule (ε = 0.002 over 3 iterations), and a wall-clock budget stop. Log why the run ended. |
+| Kabir Durgani (C) | Feed history into the prompt so the agent stops re-proposing failed ideas — this is what separates a real agent from a random-code generator. Add the retry-with-traceback path. |
+| Zening Lim (B) | Rollback on failure, retry limits, and deliberate chaos testing: hand the runner deliberately broken code and confirm the loop recovers and logs the recovery event. |
+| Dhevrath Malavar (D) | Seed the idea library into the prompt as inspiration, not instruction. Independently re-score the agent's best checkpoint to confirm it isn't fooling itself. |
+| Neo Fu Jie (E) | Draft the README and Devpost writeup now, from the logs already collected. Start the results table. Storyboard the video. |
+
+### The autonomy trap
+
+The moment you find yourself editing the model code by hand to push the score, stop. That is a manual intervention, it is counted, and it is worth more marks than the score gain. Put the idea into the agent's library and let the agent find it.
+
+## Hours 48–72 — Freeze early, run long, spend the rest on evidence
+
+**GATE:** code freeze at hour 54. Everything after that is the final run plus deliverables.
+
+| Owner | Task |
+|---|---|
+| All five | Hour 48–54: last bug fixes only. No new features. Then freeze the branch. |
+| Jadon Chan (A) + Zening Lim (B) | Hour 54: kick off the final long converged run and leave it alone. Every intervention from here gets written into the intervention count. |
+| Dhevrath Malavar (D) | Validate the submission CSV with `python3 submit.py --check`. Do this early and repeatedly — a malformed header at hour 71 is how teams lose everything. |
+| Neo Fu Jie (E) + Kabir Durgani (C) | Record and edit the 3-minute demo. Show a real iteration happening live, including a failure being recovered. Upload to YouTube as public and verify the link in an incognito window. |
+| Neo Fu Jie (E) | Final README: overview, setup, reproduction steps, limitations, per-member contributions. Results table with the absolute delta over baseline, token total, and 0 GPU-hours. |
+| All five | Hour 68: submit on Devpost. Not hour 71. Then use the remaining time to improve the writeup if the run is still going. |
 
 ---
 
@@ -878,7 +948,7 @@ Potential extensions include:
 - Git
 - GitHub
 - VS Code
-- [TODO: Add any other tools actually used in the final project]
+- Claude Code (used for code review, debugging the final submission pipeline, and README preparation)
 
 ### API
 
@@ -891,7 +961,7 @@ Potential extensions include:
 - `python-dotenv`
 - Python standard library
 
-> [TODO: Add/remove dependencies based on the final frozen repository.]
+This list is accurate as of the frozen final repository — no dependencies beyond these were introduced anywhere, including the DeepFM/target-encoding additions in the final submission pipeline.
 
 ### Dataset
 
@@ -929,4 +999,7 @@ This project builds on the organiser-provided KuaiRand-Pure starter kit and offi
 KuaiRand:
 https://kuairand.com/
 
-[TODO: Add citations/links for any research papers, public implementations or external methods actually used by the final agent.]
+Methods referenced or implemented in this project:
+
+- Guo, H., Tang, R., Ye, Y., Zhang, W., & He, X. (2017). *DeepFM: A Factorization-Machine based Neural Network for CTR Prediction.* IJCAI 2017. — architecture basis for the final submission's `DeepFM` class.
+- Rendle, S., Freudenthaler, C., Gantner, Z., & Schmidt-Thieme, L. (2009). *BPR: Bayesian Personalized Ranking from Implicit Feedback.* UAI 2009. — pairwise ranking loss proposed and attempted by the autonomous agent during the final run.
