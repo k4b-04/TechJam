@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Owner B — prompt templates.
 
@@ -42,45 +44,29 @@ HARD RULES — violating any of these invalidates the run:
    {"gauc": float, "ndcg5": float, "primary": float} computed on the
    VALIDATION split. Not writing this file is a total failure.
 6. Do not remove `splits.pop("test", None)`. Never load the test split.
-7. Keep runtime under ~8 minutes on one CPU core. The baseline now trains 3 seeds
-   per run (mean-scored for reliability) and takes ~300s total, not ~100s.
+7. Keep runtime under ~8 minutes on one CPU core. The baseline takes ~100s.
+8. Target-statistic features (per-user or per-item historical rates of the
+   label, e.g. author CTR) MUST be computed out of fold — a row must never
+   contribute to its own encoding. Use K-fold, or a strictly earlier time
+   window than the rows it is applied to. In-fold encoding makes the model
+   over-trust the feature and costs validation performance.
+9. Pairwise or listwise ranking losses (e.g. BPR) MUST sample a small, fixed
+   number of negatives per positive (e.g. 4 per positive) — NEVER build a
+   dense all-pairs matrix over the full mini-batch. `z_pos[:, None] -
+   z_neg[None, :]` is O(batch_size^2): at bs=8192 that's ~15M elements per
+   batch, ~11x slower than the pointwise baseline per step, and reliably
+   blows through rule 7's runtime budget before training even finishes one
+   seed. Draw negatives per positive instead, e.g.
+   `neg_idx = rng.integers(0, n_neg, size=(n_pos, k))`, and vectorize the
+   loss/gradient over that (n_pos, k) shape.
 
 HOW FEATURES ACTUALLY WORK HERE
-pipeline.py has its own FIELDS list and build_encoding(splits, fields, data_dir)
-function — NOT data.py's encode(), which is intentionally no longer imported
-because it hardcodes 5 tuple positions and ignores any edit to FIELDS. To try a
-different feature set, edit the FIELDS list in pipeline.py directly (e.g. add
-'music_id', 'video_type', 'upload_type', 'follow_user_num_range',
-'register_days_range', 'fans_user_num_range', 'friend_user_num_range', or
-'user_active_degree' — these columns are already loaded from
-user_features_pure.csv/video_features_basic_pure.csv and ready to use). An
-unrecognized field name raises a clear error rather than silently doing
-nothing — read the traceback and fix the name if that happens.
-
-KNOWN NON-IMPROVEMENTS — do not re-propose these, they have already been tested
-- Adding the item/user profile columns above (follow_user_num_range,
-  register_days_range, fans_user_num_range, friend_user_num_range,
-  user_active_degree, video_type, upload_type) to FIELDS: tested flat-to-negative
-  three separate times (offline ablation: primary 0.5940 vs 0.5950 baseline on
-  test; a live agent iteration: validation primary 0.6008 vs 0.6016 baseline).
-  The user_id x video_id interaction already absorbs this signal.
-- Larger FM embedding dimension (k=8/16/32 alone, no other change): flat
-  (0.5895/0.5902/0.5887 on test). Capacity is not the bottleneck at this data
-  scale — don't retry raising k without also changing the objective or features.
-
-IDEAS WORTH CONSIDERING — optional inspiration from prior analysis, not a
-checklist, and not a requirement to follow in order
-- The training loss (pointwise log-loss in FM.step) doesn't match the
-  ranking-based eval metric (GAUC/nDCG@5) — a pairwise or listwise objective
-  may close this gap without any new features at all.
-- No feature currently captures a user's sequence or recency of past
-  interactions — every impression is treated as independent of the others.
-- `long_view` is trained alone even though the logs carry other engagement
-  signals (is_like, is_follow, is_comment, is_forward, play_time_ms) — a
-  shared-embedding multi-task setup could help this sparse label.
-- `date`/`hourmin` aren't used at all, despite train/valid/test being
-  sequential time windows — validation scores run consistently ~0.006-0.007
-  above test, suggesting real temporal drift worth modeling explicitly.
+`encode()` imported from data.py builds a FIXED 5-field encoding
+(user_id, video_id, author_id, tab, duration bucket) using hardcoded tuple
+positions. Appending names to data.FIELDS does NOT register new features —
+it silently does nothing. To change the feature set you must build the
+(X, y, user_ids) arrays inside pipeline.py yourself. See ablation_features.py
+in the repo root for a working custom multi-field encoder.
 
 CALIBRATION
 Seed-to-seed noise on this benchmark is about 0.0008. A change worth keeping
