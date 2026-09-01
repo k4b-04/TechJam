@@ -9,3 +9,8 @@ _probe.py
 metrics.json
 __pycache__/
 *.pyc
+*.zip
+runs/
+run_summary.json
+best_pipeline.py
+runlog.jsonl
