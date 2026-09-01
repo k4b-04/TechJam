@@ -917,8 +917,8 @@ To keep five people moving in parallel without blocking on each other, we planne
 | Owner | Task |
 |---|---|
 | Jadon Chan (A) | Keep-or-revert logic, best-checkpoint tracking, the convergence rule (ε = 0.002 over 3 iterations), and a wall-clock budget stop. Log why the run ended. |
-| Kabir Durgani (C) | Feed history into the prompt so the agent stops re-proposing failed ideas — this is what separates a real agent from a random-code generator. Add the retry-with-traceback path. |
 | Zening Lim (B) | Rollback on failure, retry limits, and deliberate chaos testing: hand the runner deliberately broken code and confirm the loop recovers and logs the recovery event. |
+| Kabir Durgani (C) | Feed history into the prompt so the agent stops re-proposing failed ideas — this is what separates a real agent from a random-code generator. Add the retry-with-traceback path. |
 | Dhevrath Malavar (D) | Seed the idea library into the prompt as inspiration, not instruction. Independently re-score the agent's best checkpoint to confirm it isn't fooling itself. |
 | Neo Fu Jie (E) | Draft the README and Devpost writeup now, from the logs already collected. Start the results table. Storyboard the video. |
 
